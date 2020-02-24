@@ -95,7 +95,7 @@ class Reader {
   // Offset of the last record returned by ReadRecord.
   uint64_t last_record_offset_;
   // Offset of the first location past the end of buffer_.
-  uint64_t end_of_buffer_offset_;//读取第一个record的起始偏移量
+  uint64_t end_of_buffer_offset_;//记录了所有的buffer的长度，也就是记录了所有读到的slice的长度？？
 
   // Offset at which to start looking for the first record to return
   uint64_t const initial_offset_;

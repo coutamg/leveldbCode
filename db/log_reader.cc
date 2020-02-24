@@ -61,9 +61,9 @@ bool Reader::ReadRecord(Slice* record, std::string* scratch) {
     }
   }
 
-  scratch->clear();
+  scratch->clear();//用于拼接某个record位于多个block上
   record->clear();
-  bool in_fragmented_record = false;
+  bool in_fragmented_record = false;//true表示在读某个record的中间部分，读取了record的开头部分
   // Record offset of the logical record that we're reading
   // 0 is a dummy value to make compilers happy
   uint64_t prospective_record_offset = 0;
@@ -79,7 +79,7 @@ bool Reader::ReadRecord(Slice* record, std::string* scratch) {
 */
   Slice fragment;
   while (true) {
-    const unsigned int record_type = ReadPhysicalRecord(&fragment);
+    const unsigned int record_type = ReadPhysicalRecord(&fragment);//实际上读的是block里面的内容
 
     // ReadPhysicalRecord may have only had an empty trailer remaining in its
     // internal buffer. Calculate the offset of the next physical record now
@@ -224,7 +224,7 @@ unsigned int Reader::ReadPhysicalRecord(Slice* result) {
     }
 
     // Parse the header
-    const char* header = buffer_.data();
+    const char* header = buffer_.data(); //由于一个block的开头存的是某个slice的head(不一定是这个slice最初的head，而是这个slice数据在这个block中的head)
     const uint32_t a = static_cast<uint32_t>(header[4]) & 0xff;//length的低8位
     const uint32_t b = static_cast<uint32_t>(header[5]) & 0xff;//length的高8位
     const unsigned int type = header[6];
@@ -270,7 +270,12 @@ unsigned int Reader::ReadPhysicalRecord(Slice* result) {
 
     buffer_.remove_prefix(kHeaderSize + length);//这个时候buffer_ size应该为0了
 
-    // Skip physical record that started before initial_offset_
+    // Skip physical record that started before initial_offset_，这里表示这个物理的record(也就是slicd在某个block上的数据)，位于initial_offset_
+    //之前的，这样的record数据是不能要的，也说明了initial_offset_落在某个slice数据中间
+    /*  skip的时候，跳过的都是block的整数倍。但是有可能存在这种较大的Slice。一个slice就是
+        N个block。有可能跳过block之后，还是处在slice的中间。这个时候，也是读不了一个完整
+        的slice数据
+    */
     if (end_of_buffer_offset_ - buffer_.size() - kHeaderSize - length <
         initial_offset_) {
       result->clear();
