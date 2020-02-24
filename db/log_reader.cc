@@ -198,8 +198,8 @@ void Reader::ReportDrop(uint64_t bytes, const Status& reason) {
 
 unsigned int Reader::ReadPhysicalRecord(Slice* result) {
   while (true) {
-    if (buffer_.size() < kHeaderSize) {
-      if (!eof_) {
+    if (buffer_.size() < kHeaderSize) {//一般来说，初始化的时候 buffer_ size为0
+      if (!eof_) {//这个block没有结束
         // Last read was a full read, so this is a trailer to skip
         buffer_.clear();
         Status status = file_->Read(kBlockSize, &buffer_, backing_store_);
@@ -244,7 +244,7 @@ unsigned int Reader::ReadPhysicalRecord(Slice* result) {
       return kEof;
     }
 
-    if (type == kZeroType && length == 0) {
+    if (type == kZeroType && length == 0) {//kZeroType是留给预分配用的
       // Skip zero length record without reporting any drops since
       // such records are produced by the mmap based writing code in
       // env_posix.cc that preallocates file regions.
