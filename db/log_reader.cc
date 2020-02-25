@@ -61,6 +61,11 @@ bool Reader::ReadRecord(Slice* record, std::string* scratch) {
     }
   }
 
+  /*
+    当文件中的record是<firstRecord, middleRecord, lastRecord>的时候。
+    scratch需要做一个缓冲区，把一个一个record的数据缓存起来。最后拼接成一个大的 
+    Slice返回给客户端。
+  */
   scratch->clear();//用于拼接某个record位于多个block上
   record->clear();
   bool in_fragmented_record = false;//true表示在读某个record的中间部分，读取了record的开头部分
@@ -152,6 +157,8 @@ bool Reader::ReadRecord(Slice* record, std::string* scratch) {
         break;
 
       case kEof:
+        // 文件都读结束了，还处在“读在中间”状态。说明写入的时候没有写入一个完整的
+        // record。没办法，直接向客户端返回没有完整的slice数据了。
         if (in_fragmented_record) {
           // This can be caused by the writer dying immediately after
           // writing a physical record but before completing the next; don't
@@ -161,6 +168,8 @@ bool Reader::ReadRecord(Slice* record, std::string* scratch) {
         return false;
 
       case kBadRecord:
+        // 如果读到了坏的record，又刚好处理“读在中间”的状态。那么返回出错!!
+        // 如果这个坏掉的record不是在读的record范围里面。直接返回读失败。
         if (in_fragmented_record) {
           ReportCorruption(scratch->size(), "error in middle of record");
           in_fragmented_record = false;
@@ -196,14 +205,18 @@ void Reader::ReportDrop(uint64_t bytes, const Status& reason) {
   }
 }
 
+//写入的时候是按照32KB一个block来写入。在读取的时候，就可以32KB来读入了。所以在读入的时候，肯定是以32KB为单位来读的
 unsigned int Reader::ReadPhysicalRecord(Slice* result) {
   while (true) {
     if (buffer_.size() < kHeaderSize) {//一般来说，初始化的时候 buffer_ size为0
       if (!eof_) {//这个block没有结束
         // Last read was a full read, so this is a trailer to skip
+        // 如果还没有遇到结束
+        // 上一次的读是一个完整的读。那么可能这里有一点尾巴需要处理。
         buffer_.clear();
+        // 这里是读kBlockSize个字符串到buffer_里面。
         Status status = file_->Read(kBlockSize, &buffer_, backing_store_);
-        end_of_buffer_offset_ += buffer_.size();
+        end_of_buffer_offset_ += buffer_.size();//先把偏移处理了
         if (!status.ok()) {
           buffer_.clear();
           ReportDrop(kBlockSize, status);
@@ -214,6 +227,9 @@ unsigned int Reader::ReadPhysicalRecord(Slice* result) {
         }
         continue;
       } else {
+        // 注意：如果buffer_是非空的。我们有一个truncated header在文件的尾巴。
+        // 这可能是由于在写header时crash导致的。
+        // 与其把这个失败的写入当成错误来处理，还不如直接当成EOF呢。
         // Note that if buffer_ is non-empty, we have a truncated header at the
         // end of the file, which can be caused by the writer crashing in the
         // middle of writing the header. Instead of considering this an error,
@@ -229,7 +245,7 @@ unsigned int Reader::ReadPhysicalRecord(Slice* result) {
     const uint32_t b = static_cast<uint32_t>(header[5]) & 0xff;//length的高8位
     const unsigned int type = header[6];
     const uint32_t length = a | (b << 8);//这里的length就是写入record里面data的长度，并不包括header
-    if (kHeaderSize + length > buffer_.size()) {
+    if (kHeaderSize + length > buffer_.size()) {// 如果头部记录的数据长度比实际的buffer_.size还要大。那肯定是出错了。
       size_t drop_size = buffer_.size();
       buffer_.clear();
       if (!eof_) {
@@ -244,6 +260,9 @@ unsigned int Reader::ReadPhysicalRecord(Slice* result) {
       return kEof;
     }
 
+    // 如果是zero type。那么返回Bad Record
+    // 这种情况是有可能的。比如写入record到block里面之后。可能会遇到
+    // 还余下7个bytes的情况。这个时候只能写入一个空的record。
     if (type == kZeroType && length == 0) {//kZeroType是留给预分配用的
       // Skip zero length record without reporting any drops since
       // such records are produced by the mmap based writing code in
@@ -268,7 +287,8 @@ unsigned int Reader::ReadPhysicalRecord(Slice* result) {
       }
     }
 
-    buffer_.remove_prefix(kHeaderSize + length);//这个时候buffer_ size应该为0了
+    // 移除当前的record占用的缓冲区
+    buffer_.remove_prefix(kHeaderSize + length);//这个时候buffer_ size应该为0? 不一定，因为buffer读取的是block的内容，该block可能包含多个record
 
     // Skip physical record that started before initial_offset_，这里表示这个物理的record(也就是slicd在某个block上的数据)，位于initial_offset_
     //之前的，这样的record数据是不能要的，也说明了initial_offset_落在某个slice数据中间
@@ -276,6 +296,16 @@ unsigned int Reader::ReadPhysicalRecord(Slice* result) {
         N个block。有可能跳过block之后，还是处在slice的中间。这个时候，也是读不了一个完整
         的slice数据
     */
+    // f->read()..之后有end_of_buffer_offset_ += buffer_.size();
+    // 但是这里end_of_buffer_offset_ - buffer_.size()
+    // 减了之后，减去的不是刚读出来的数据块的大小。比如32KB。
+    // 这个时候的buffer_size.指的是未读的record的数据大小。
+    // end_of_buffer_offset_ - buffer_.size就是已经读掉的缓冲区的指针的位置。
+    // end_of_buffer_offset_ 
+    //      - buffer_.size()
+    //     - kHeaderSize
+    //     - length
+    // 这里得到的就是刚读出来的record的起始位置。
     if (end_of_buffer_offset_ - buffer_.size() - kHeaderSize - length <
         initial_offset_) {
       result->clear();
