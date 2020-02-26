@@ -95,6 +95,8 @@ bool Reader::ReadRecord(Slice* record, std::string* scratch) {
   while (true) {
     const unsigned int record_type = ReadPhysicalRecord(&fragment);//实际上读的是block里面的内容
 
+    // record：表示的是能完整的记录一个slice的，这个record可能需要好几个block来记录，也可能一个block就能记录多个record
+    // physical record：记录在一个block里面的record格式，一个record可能被分成多个physical record记录在多个Block里面。
     // ReadPhysicalRecord may have only had an empty trailer remaining in its
     // internal buffer. Calculate the offset of the next physical record now
     // that it has returned, properly accounting for its header size.
@@ -103,6 +105,9 @@ bool Reader::ReadRecord(Slice* record, std::string* scratch) {
                                      另外一种就是head里面的length大于该block数据的长度(这种情况说明记录block出错了，因为head里的length<=block.size)
                                   b. 只有fragment.size == 0，则表示读到的PhysicalRecord是位于initial_offset_之前的
                                   上述的都是需要跳过去的
+          physical_record_offset记录的就是一个physical_record在一个Reader(read对象)里面的偏移量，不是在文件里面的偏移量
+          那么这个物理偏移量可能指向的位置是：<firstRecord, middleRecord, lastRecord>  分别可能指向1,2,3开始的位置。
+                                                  1            2             3
     */
     uint64_t physical_record_offset =
         end_of_buffer_offset_ - buffer_.size() - kHeaderSize - fragment.size();

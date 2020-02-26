@@ -93,7 +93,7 @@ class Reader {
   bool eof_;  // Last Read() indicated EOF by returning < kBlockSize
 
   // Offset of the last record returned by ReadRecord.
-  uint64_t last_record_offset_;
+  uint64_t last_record_offset_;//最后读的一个完整的用户数据的偏移量
   // Offset of the first location past the end of buffer_.
   uint64_t end_of_buffer_offset_;//记录了所有的buffer的长度，也就是记录了所有读到的slice的长度？？
 
