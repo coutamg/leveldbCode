@@ -85,7 +85,7 @@ class Reader {
   void ReportCorruption(uint64_t bytes, const char* reason);
   void ReportDrop(uint64_t bytes, const Status& reason);
 
-  SequentialFile* const file_;
+  SequentialFile* const file_;//这里假设文件的current
   Reporter* const reporter_;
   bool const checksum_;
   char* const backing_store_;

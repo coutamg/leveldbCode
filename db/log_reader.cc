@@ -1,6 +1,7 @@
 // Copyright (c) 2011 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
+//参考[https://zhuanlan.zhihu.com/p/35188065]
 
 #include "db/log_reader.h"
 
@@ -30,19 +31,27 @@ Reader::Reader(SequentialFile* file, Reporter* reporter, bool checksum,
 
 Reader::~Reader() { delete[] backing_store_; }
 
+//跳转到initial_offset_所在的block的开始位置，同时调整end_of_buffer_offset_，与file_文件指针指向该block的起始地址
 bool Reader::SkipToInitialBlock() {
+  // 块中偏移，离block开头的多远
   const size_t offset_in_block = initial_offset_ % kBlockSize;
+  // 需要跳过的块的位置
+  // 这个变量的意思是说，后面在读的时候，要读的块的开头地址是什么，定位到读取block的开始位置
   uint64_t block_start_location = initial_offset_ - offset_in_block;
 
   // Don't search a block if we'd be in the trailer
+  // 如果给定的初始位置的块中偏移
+  // 刚好掉在了尾巴上的6个bytes以内。那么
+  // 这个时候，应该是需要直接切入到下一个block的。
   if (offset_in_block > kBlockSize - 6) {
     block_start_location += kBlockSize;
   }
-
+  // 注意end_of_buffer_offset的设置是块的开始地址。，默认缓冲区是按32k增长的，且假设这个是随意申请
   end_of_buffer_offset_ = block_start_location;
 
   // Skip to start of first block that can contain the initial record
   if (block_start_location > 0) {
+    //这里实际上是把文件指针(设为current)移动到与end_of_buffer_offset_齐平，这里没与initial_offset_对齐(有可能)
     Status skip_status = file_->Skip(block_start_location);
     if (!skip_status.ok()) {
       ReportDrop(block_start_location, skip_status);
@@ -89,6 +98,12 @@ bool Reader::ReadRecord(Slice* record, std::string* scratch) {
     // ReadPhysicalRecord may have only had an empty trailer remaining in its
     // internal buffer. Calculate the offset of the next physical record now
     // that it has returned, properly accounting for its header size.
+    /*
+      1. record_type为kBadRecord，a. buffer_.size == 0 且 fragment.size == 0，一种是head里面的length为0且type == kZeroType
+                                     另外一种就是head里面的length大于该block数据的长度(这种情况说明记录block出错了，因为head里的length<=block.size)
+                                  b. 只有fragment.size == 0，则表示读到的PhysicalRecord是位于initial_offset_之前的
+                                  上述的都是需要跳过去的
+    */
     uint64_t physical_record_offset =
         end_of_buffer_offset_ - buffer_.size() - kHeaderSize - fragment.size();
 
@@ -287,8 +302,8 @@ unsigned int Reader::ReadPhysicalRecord(Slice* result) {
       }
     }
 
-    // 移除当前的record占用的缓冲区
-    buffer_.remove_prefix(kHeaderSize + length);//这个时候buffer_ size应该为0? 不一定，因为buffer读取的是block的内容，该block可能包含多个record
+    // 移除当前的record占用的缓冲区，移除的就是位于block其起始的head里面记录的record的长度
+    buffer_.remove_prefix(kHeaderSize + length);
 
     // Skip physical record that started before initial_offset_，这里表示这个物理的record(也就是slicd在某个block上的数据)，位于initial_offset_
     //之前的，这样的record数据是不能要的，也说明了initial_offset_落在某个slice数据中间
@@ -305,14 +320,15 @@ unsigned int Reader::ReadPhysicalRecord(Slice* result) {
     //      - buffer_.size()
     //     - kHeaderSize
     //     - length
-    // 这里得到的就是刚读出来的record的起始位置。
+    // 这里得到的就是刚读出来的record的起始位置，其实就是该block的起始位置
+    // 这里需要跳过那些起始位置位于initial_offset_之前的record数据
     if (end_of_buffer_offset_ - buffer_.size() - kHeaderSize - length <
         initial_offset_) {
       result->clear();
       return kBadRecord;
     }
 
-    *result = Slice(header + kHeaderSize, length);
+    *result = Slice(header + kHeaderSize, length);//从block里面读到的record
     return type;
   }
 }
