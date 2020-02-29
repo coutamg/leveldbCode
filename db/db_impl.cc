@@ -287,19 +287,27 @@ void DBImpl::RemoveObsoleteFiles() {
   mutex_.Lock();
 }
 
+// VersionEdit和save_manifest都是传进来，然后要被修改的。
 Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
+  // 如果要进行操作，必须要保证锁是获得的。
   mutex_.AssertHeld();
 
   // Ignore error from CreateDir since the creation of the DB is
   // committed only when the descriptor is created, and this directory
   // may already exist from a previous failed creation attempt.
+  // 忽略CreateDir时遇到的错误。
+  // 这个时候可能遇到的错误是之前的failed的操作。留下了这个目录的残留。
   env_->CreateDir(dbname_);
   assert(db_lock_ == nullptr);
+  // 添加文件锁
   Status s = env_->LockFile(LockFileName(dbname_), &db_lock_);
   if (!s.ok()) {
     return s;
   }
 
+  // CurrentFileName = db.dir/CURRENT
+  // 看一下这个相应的文件是否存在，然后根据情况来
+  // 看一下是否报错。
   if (!env_->FileExists(CurrentFileName(dbname_))) {
     if (options_.create_if_missing) {
       s = NewDB();
@@ -317,7 +325,7 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
     }
   }
 
-  s = versions_->Recover(save_manifest);
+  s = versions_->Recover(save_manifest);//创建version
   if (!s.ok()) {
     return s;
   }
@@ -330,21 +338,56 @@ Status DBImpl::Recover(VersionEdit* edit, bool* save_manifest) {
   // Note that PrevLogNumber() is no longer used, but we pay
   // attention to it in case we are recovering a database
   // produced by an older version of leveldb.
+  // 通过建立起来的version set可以拿到min log。
+  // 这个min log也就是当前最大的WAL LOG序号。
+  // 不是应该叫max log么？为什么叫min_log？
+  // 根据序号分发来说。这个时候min_log就是最小的可用的WAL LOG序号了。
+  // 大不了可以把新来的<key, value> append到这个文件后面。
+  // 或者是重新生成一个WAL LOG。
   const uint64_t min_log = versions_->LogNumber();
+  // prev log主要是记录了上次db服务正常的时候，正在用的log文件序号。
+  // 也是为了方便恢复。
   const uint64_t prev_log = versions_->PrevLogNumber();
+
+  // 这里应该是到数据库所在目录下，把这个目录里面的所有的文件都放到filenames
+  // 这个vector里面。
+  // 比如testdb目录下的文件列表是：
+  // 000005.ldb      000011.ldb      000017.ldb      000021.log      LOCK            LOG.old
+  // 000008.ldb      000014.ldb      000020.ldb      CURRENT         LOG             MANIFEST-000019
   std::vector<std::string> filenames;
   s = env_->GetChildren(dbname_, &filenames);
   if (!s.ok()) {
     return s;
   }
+  // 那么尝试输出filenames
+  // .,..,000005.ldb,000008.ldb,
+  // 000011.ldb,000014.ldb,
+  // 000017.ldb,000018.log,CURRENT,
+  // LOCK,LOG,LOG.old,MANIFEST-000016,
+
   std::set<uint64_t> expected;
   versions_->AddLiveFiles(&expected);
+  // expected列表就只会罗列文件的序号：
+  // [ 5,8,11,14,17 ]
+
   uint64_t number;
   FileType type;
   std::vector<uint64_t> logs;
+  // 这里面存放了所有大于等于当前版本min log的LOG序号。
+  // 此外，还会把前一个序号pre_log也保存起来。
+
+  // 遍历目录下面的所有的文件
   for (size_t i = 0; i < filenames.size(); i++) {
+    // 根据文件名来决定是什么样的类型。
+    // number是什么？文件名里面的数字。
+    // 如果解析失败，比如不是logFile，这个时候number = 0.
+    // ParseFileName主要功能就是根据文件名，返回类型以及序号。
+    // 除WAL LOG使用了序号。其他文件也是使用了序号。
     if (ParseFileName(filenames[i], &number, &type)) {
       expected.erase(number);
+      // 从列表中把日志文件找出来
+      // 并且要求number >= min_log或者说number == prev_log
+      // prev_log为0时。number == 0但是这个时候，很有可能type != logFile。
       if (type == kLogFile && ((number >= min_log) || (number == prev_log)))
         logs.push_back(number);
     }
