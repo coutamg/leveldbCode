@@ -747,7 +747,8 @@ VersionSet::VersionSet(const std::string& dbname, const Options* options,
       descriptor_file_(nullptr),
       descriptor_log_(nullptr),
       dummy_versions_(this),
-      current_(nullptr) {
+      current_(nullptr) {// 这里当前版本指向的是空的。
+                         // 其值会在AppendVersion里面更新。
   AppendVersion(new Version(this));
 }
 
@@ -769,6 +770,9 @@ void VersionSet::AppendVersion(Version* v) {
   v->Ref();
 
   // Append to linked list
+  //dummy_versions_就是这样的一个双向链表。
+  //从初始化的角度来看。dummy_versions_就是在双向链表中插入第一个Version。
+  //就是把 v 插入到 dummy_versions_ 前面
   v->prev_ = dummy_versions_.prev_;
   v->next_ = &dummy_versions_;
   v->prev_->next_ = v;
@@ -869,6 +873,7 @@ Status VersionSet::Recover(bool* save_manifest) {
   };
 
   // Read "CURRENT" file, which contains a pointer to the current manifest file
+  // 这里读取CURRENT文件里面的内容到current里面
   std::string current;
   Status s = ReadFileToString(env_, CurrentFileName(dbname_), &current);
   if (!s.ok()) {
@@ -879,8 +884,13 @@ Status VersionSet::Recover(bool* save_manifest) {
   }
   current.resize(current.size() - 1);
 
+  // 如果CURRENT文件里面写的是MANIFEST-00003
   std::string dscname = dbname_ + "/" + current;
+  // 那么dscname = "MANIFEST-00003"
   SequentialFile* file;
+  // 这里生成一个新的SequentialFile.
+  // 这里只是生成一个新的内存结构体，指向已经有的文件
+  // 并且是按照只读的方式来打开。
   s = env_->NewSequentialFile(dscname, &file);
   if (!s.ok()) {
     if (s.IsNotFound()) {
@@ -890,6 +900,11 @@ Status VersionSet::Recover(bool* save_manifest) {
     return s;
   }
 
+  // VersionBuilder
+  // current_指向当前的version.
+  // 通过初始化函数的构造。current_已经是一个空的version了。
+  // builder这里就是相当于回放器。利用current_作为基准。
+  // 然后把历史上的操作都在current_上重放。
   bool have_log_number = false;
   bool have_prev_log_number = false;
   bool have_next_file = false;
@@ -903,13 +918,17 @@ Status VersionSet::Recover(bool* save_manifest) {
   {
     LogReporter reporter;
     reporter.status = &s;
+    // 也就是前面的manifestfile.
+    // 通过前面的介绍，知道manifest文件里面存放的就是一个一个的version_edit。
     log::Reader reader(file, &reporter, true /*checksum*/,
                        0 /*initial_offset*/);
     Slice record;
+    // 主要起作用的还是record. scratch只是做为一个缓冲区。
     std::string scratch;
     while (reader.ReadRecord(&record, &scratch) && s.ok()) {
       VersionEdit edit;
       s = edit.DecodeFrom(record);
+      // 前面的操作都正确的情况builder apply这个VersionEdit.
       if (s.ok()) {
         if (edit.has_comparator_ &&
             edit.comparator_ != icmp_.user_comparator()->Name()) {
@@ -920,7 +939,7 @@ Status VersionSet::Recover(bool* save_manifest) {
       }
 
       if (s.ok()) {
-        builder.Apply(&edit);
+        builder.Apply(&edit);//Apply就是把一个VersionEdit不断地Apply到一个Current Version上
       }
 
       if (edit.has_log_number_) {
