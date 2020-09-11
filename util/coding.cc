@@ -100,21 +100,6 @@ int VarintLength(uint64_t v) {
 }
 
 
-// 下面的编码规则需要详细理解:
-// 1.每个字节的最高位是保留位, 如果是1说明后面的字节还是属于当前数据的,
-//   如果是0,那么这是当前数据的最后一个字节数据
-//   看下面代码,因为一个字节最高位是保留位,那么这个字节中只有下面7bits可以保存数据
-//   所以,如果x>127,那么说明这个数据还需大于一个字节保存,所以当前字节最高位是1,
-//   看下面的buf[n] = 0x80 | ...
-//   0x80说明将这个字节最高位置为1, 后面的x&0x7F是取得x的低7位数据, 
-//   那么0x80 | uint8(x&0x7F)整体的意思就是
-//   这个字节最高位是1表示这不是最后一个字节,后面7为是正式数据! 
-//   注意操作下一个字节之前需要将x>>=7
-// 2.看如果x<=127那么说明x现在使用7bits可以表示了,那么最高位没有必要是1,
-//   直接是0就ok!所以最后直接是buf[n] = uint8(x)
-//   如果数据大于一个字节(127是一个字节最大数据), 那么继续, 即: 需要在最高位加上1
-
-
 const char* GetVarint32PtrFallback(const char* p, const char* limit,
                                    uint32_t* value) {
   uint32_t result = 0;
@@ -122,12 +107,12 @@ const char* GetVarint32PtrFallback(const char* p, const char* limit,
     uint32_t byte = *(reinterpret_cast<const uint8_t*>(p));
     p++;
 
-    if (byte & 128) {
+    if (byte & 128) { // 字节最高位为 1 表示后面还有数据
       // More bytes are present
       // byte & 127 表示取出 7 bit数据  
       // (<< shift):右移7位, 继续后面的数据处理
       result |= ((byte & 127) << shift);
-    } else {
+    } else { // 最后一个字节数据
       result |= (byte << shift);
       *value = result;
       return reinterpret_cast<const char*>(p);
