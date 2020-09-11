@@ -886,7 +886,7 @@ Status VersionSet::Recover(bool* save_manifest) {
 
   // 如果CURRENT文件里面写的是MANIFEST-00003
   std::string dscname = dbname_ + "/" + current;
-  // 那么dscname = "MANIFEST-00003"
+  // 那么dscname = "dbname/MANIFEST-00003"
   SequentialFile* file;
   // 这里生成一个新的SequentialFile.
   // 这里只是生成一个新的内存结构体，指向已经有的文件

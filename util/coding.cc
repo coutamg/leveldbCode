@@ -6,6 +6,22 @@
 
 namespace leveldb {
 
+/*
+  参考: https://juejin.im/post/6844903953327456263
+
+  统一采用小段序: 一个多位的整数，按照存储地址从低到高排序的字节中，
+      如果该整数的最低有效字节（类似于最低有效位）在最高有效字节的前面，
+      则称小端序；反之则称大端序
+
+  对数字123456进行varint编码，123456用二进制表示为1 11100010 01000000，
+  每次从低向高取7位再加上最高有效位变成1100 0000 11000100 00000111 
+  所以经过varint编码后123456占用三个字节分别为192 196 7
+
+  解码的过程就是将字节依次取出，去掉最高有效位，因为是小端排序所以先解码的
+  字节要放在低位，之后解码出来的二进制位继续放在之前已经解码出来的二进制的
+  高位最后转换为10进制数完成varint编码的解码过程。
+*/
+
 void PutFixed32(std::string* dst, uint32_t value) {
   char buf[sizeof(value)];
   EncodeFixed32(buf, value);
@@ -83,14 +99,33 @@ int VarintLength(uint64_t v) {
   return len;
 }
 
+
+// 下面的编码规则需要详细理解:
+// 1.每个字节的最高位是保留位, 如果是1说明后面的字节还是属于当前数据的,
+//   如果是0,那么这是当前数据的最后一个字节数据
+//   看下面代码,因为一个字节最高位是保留位,那么这个字节中只有下面7bits可以保存数据
+//   所以,如果x>127,那么说明这个数据还需大于一个字节保存,所以当前字节最高位是1,
+//   看下面的buf[n] = 0x80 | ...
+//   0x80说明将这个字节最高位置为1, 后面的x&0x7F是取得x的低7位数据, 
+//   那么0x80 | uint8(x&0x7F)整体的意思就是
+//   这个字节最高位是1表示这不是最后一个字节,后面7为是正式数据! 
+//   注意操作下一个字节之前需要将x>>=7
+// 2.看如果x<=127那么说明x现在使用7bits可以表示了,那么最高位没有必要是1,
+//   直接是0就ok!所以最后直接是buf[n] = uint8(x)
+//   如果数据大于一个字节(127是一个字节最大数据), 那么继续, 即: 需要在最高位加上1
+
+
 const char* GetVarint32PtrFallback(const char* p, const char* limit,
                                    uint32_t* value) {
   uint32_t result = 0;
   for (uint32_t shift = 0; shift <= 28 && p < limit; shift += 7) {
     uint32_t byte = *(reinterpret_cast<const uint8_t*>(p));
     p++;
+
     if (byte & 128) {
       // More bytes are present
+      // byte & 127 表示取出 7 bit数据  
+      // (<< shift):右移7位, 继续后面的数据处理
       result |= ((byte & 127) << shift);
     } else {
       result |= (byte << shift);
