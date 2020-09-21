@@ -631,11 +631,23 @@ class VersionSet::Builder {
     // Update compaction pointers
     for (size_t i = 0; i < edit->compact_pointers_.size(); i++) {
       const int level = edit->compact_pointers_[i].first;
+      // 在这个level里面，下次开始做compact的开始的key
+      // 对于一个level来说，合并的时候的key的指针不是每次都从头开始扫描。
+      // 如果每次合并都从这层level的第一个文件扫描到最后一个文件。实际上是
+      // 会增加读的压力。所以一种折中就是每次需要合并的时候，记住上次合并完
+      // 成后的位置，下次合并的时候从这里开始合并。
       vset_->compact_pointer_[level] =
           edit->compact_pointers_[i].second.Encode().ToString();
     }
 
     // Delete files
+    // 每次version edit都会有需要删除的文件。
+    // 比如version0要删除level0_a,
+    // version1要删除level1_a,
+    // version2要删除level2_a
+    // 这里采用的方法非常简单。就是直接把相应文件的序号插入进来就可以了。
+    // 我觉得这里可以加个assert，那就是，前面一个版本需要删除的文件
+    // 在这个版本里面，就不应该再出现。
     for (const auto& deleted_file_set_kvp : edit->deleted_files_) {
       const int level = deleted_file_set_kvp.first;
       const uint64_t number = deleted_file_set_kvp.second;
@@ -643,6 +655,12 @@ class VersionSet::Builder {
     }
 
     // Add new files
+    // 每个版本都可以增加文件。这里采取的操作非常简单。就是把
+    // number添加到added_files里面。
+    // 如果这个文件还在deleted files里面。那么就需要删除之。
+    // Q: 按理说序号是不断递增的。一个版本要删除的文件，不应该再次added_files．
+    // 此外，还加了对于合并的控制。就是当一个文件经常被扫描到的时候。就需要进行合并了。
+    // 这里做了扫描次数的一个统计与阀值设置。
     for (size_t i = 0; i < edit->new_files_.size(); i++) {
       const int level = edit->new_files_[i].first;
       FileMetaData* f = new FileMetaData(edit->new_files_[i].second);

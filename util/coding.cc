@@ -9,7 +9,7 @@ namespace leveldb {
 /*
   参考: https://juejin.im/post/6844903953327456263
 
-  统一采用小段序: 一个多位的整数，按照存储地址从低到高排序的字节中，
+  统一采用小端序: 一个多位的整数，按照存储地址从低到高排序的字节中，
       如果该整数的最低有效字节（类似于最低有效位）在最高有效字节的前面，
       则称小端序；反之则称大端序
 
@@ -99,6 +99,12 @@ int VarintLength(uint64_t v) {
   return len;
 }
 
+// 解码实现
+// 下面这个分成三步走:
+// 1: b & 0x7F 获取下7bits有效数据
+// 2: (b & 0x7F) << shift 由于是小端序, 所以每次处理一个Byte数据, 
+//    都需要向高位移动7bits
+// 3: 将数据x和当前的这个字节数据 | 在一起
 
 const char* GetVarint32PtrFallback(const char* p, const char* limit,
                                    uint32_t* value) {
